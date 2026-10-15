@@ -185,3 +185,10 @@ dialog h2 { margin: 0; }
 .slip .sigs div { border-top: 1px solid #000; padding-top: 1.5mm; font-size: 8.5pt; }
 .slip .sigs div:nth-child(3) { grid-column: 4; }
 .slip .sigs div:nth-child(4) { grid-column: 5; }
+
+/* import box (before a sheet is loaded) */
+.importbox { background: var(--surface); border: 2px dashed var(--line); border-radius: 14px; padding: 40px 24px; display: grid; gap: 14px; justify-items: center; text-align: center; }
+.importbox h1 { margin: 0; font-size: 1.5rem; }
+.importbox p { margin: 0; max-width: 60ch; }
+.chip.ok { background: var(--good-soft); color: var(--good); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
