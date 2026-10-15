@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Lezmin Payroll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- LOGIN -->
+<main id="login" class="login" hidden>
+  <form id="loginForm" class="login-card">
+    <h1>Lezmin Payroll</h1>
+    <p class="muted">Sign in to capture the month and print payslips.</p>
+    <label class="f">Email <input type="email" id="loginEmail" autocomplete="username" required></label>
+    <label class="f">Password <input type="password" id="loginPassword" autocomplete="current-password" required></label>
+    <div id="loginErr" class="notice bad" hidden></div>
+    <button class="primary big" type="submit" id="loginBtn">Sign in</button>
+    <p class="muted small">Forgot your password? Ask the person who set up this site to reset it.</p>
+  </form>
+</main>
+
+<!-- APP -->
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand"><strong id="coName">Lezmin</strong> <span class="muted">Payroll</span></div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" id="tab-month" aria-selected="true">Pay month</button>
+      <button role="tab" id="tab-staff" aria-selected="false">Staff</button>
+      <button role="tab" id="tab-settings" aria-selected="false" hidden>Settings</button>
+    </nav>
+    <button class="ghost small" id="signOut">Sign out</button>
+  </header>
+
+  <div class="page">
+    <div id="banner" class="notice warn" hidden></div>
+
+    <!-- PAY MONTH -->
+    <section id="view-month" class="stack">
+      <div class="monthhead">
+        <div>
+          <p class="muted small" style="margin:0">Paying for</p>
+          <h1 id="monthTitle" style="margin:0">—</h1>
+          <div class="monthmeta"><span id="workPill" class="pill"></span><span id="calHint" class="muted small"></span></div>
+        </div>
+        <div class="bar">
+          <label class="f inline">Month <input type="month" id="periodInput"></label>
+          <label class="f inline">Pay date <input type="date" id="payDate"></label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary big" id="printAll">Print all payslips</button>
+        <button class="big" id="pdfAll">Save all as one PDF</button>
+        <button class="big" id="zipAll">Save each person's slip (ZIP)</button>
+        <button class="big" id="xlsx">Export to Excel</button>
+        <span class="spacer"></span>
+        <button class="big danger" id="resetBtn">Start next month</button>
+      </div>
+
+      <div class="totals" id="totals"></div>
+
+      <div class="list" id="monthList"><div class="empty">Loading staff…</div></div>
+      <p class="muted small">Tap a person to type their leave, Sundays, overtime and other changes. Anyone you leave untouched gets a full month. <span id="saveState" class="savestate"></span></p>
+    </section>
+
+    <!-- STAFF -->
+    <section id="view-staff" class="stack" hidden>
+      <div class="bar">
+        <input type="search" id="staffSearch" placeholder="Search by name or number" class="search">
+        <span class="spacer"></span>
+        <button class="primary" id="addStaff">Add new staff member</button>
+      </div>
+      <h2 class="section">Current staff <span id="curCount" class="muted"></span></h2>
+      <div class="list" id="staffList"></div>
+      <h2 class="section">Former staff</h2>
+      <div class="list" id="formerList"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="view-settings" hidden>
+      <form id="settingsForm" class="stack narrow">
+        <div class="notice warn">These numbers drive every payslip. Change them only when the rate or the rules change. </div>
+        <h2 class="section">Company on the payslip</h2>
+        <div class="fgrid">
+          <label class="f">Company name <input id="s_companyName"></label>
+          <label class="f">Registration number <input id="s_regNo"></label>
+          <label class="f wide">Address <input id="s_address"></label>
+          <label class="f">Phone <input id="s_phone"></label>
+        </div>
+        <h2 class="section">Pay rules</h2>
+        <div class="fgrid">
+          <label class="f">Hourly rate (R) <input type="number" step="0.01" id="s_hourlyRate"></label>
+          <label class="f">Working days in a month <input type="number" step="1" id="s_workingDays"></label>
+          <label class="f">Ormonde hours per day <input type="number" step="0.25" id="s_hoursO"></label>
+          <label class="f">Xavier hours per day <input type="number" step="0.25" id="s_hoursX"></label>
+          <label class="f">UIF employee % <input type="number" step="0.01" id="s_uifPct"></label>
+          <label class="f">Each Sunday pays (× day rate) <input type="number" step="0.05" id="s_sundayFactor"><span class="hint">Current slips: 0.5</span></label>
+          <label class="f">Overtime pays (× hourly rate) <input type="number" step="0.05" id="s_otFactor"><span class="hint">Time and a half: 1.5</span></label>
+          <label class="f">Deduct late minutes? <select id="s_deductLate"><option value="no">No, only record them</option><option value="yes">Yes, at the per-minute rate</option></select></label>
+        </div>
+        <div class="bar"><button class="primary" type="submit">Save settings</button><span id="settingsMsg" class="muted small"></span></div>
+      </form>
+    </section>
+  </div>
+</div>
+
+<!-- STAFF FORM -->
+<dialog id="staffDlg">
+  <form id="staffForm" novalidate>
+    <h2 id="staffDlgTitle">New staff member</h2>
+    <h3 class="section">Who they are</h3>
+    <div class="fgrid">
+      <label class="f">Full name * <input id="f_name" autocomplete="off"></label>
+      <label class="f">Known as <input id="f_known_as" placeholder="e.g. Talent"><span class="hint">Nickname, if they go by one</span></label>
+      <label class="f">ID or passport number <input id="f_id_number" autocomplete="off"></label>
+      <label class="f">Date of birth <input type="date" id="f_dob"></label>
+      <label class="f">Phone number <input id="f_phone" inputmode="tel"></label>
+    </div>
+    <h3 class="section">The job</h3>
+    <div class="fgrid">
+      <label class="f">Employee number * <input id="f_emp_no"><span class="hint" id="empNoHint"></span></label>
+      <label class="f">Occupation <input id="f_occupation" list="occs"></label>
+      <label class="f">Start date * <input type="date" id="f_start_date"></label>
+      <div class="f wide">Which site do they work at? *<div class="radios" id="siteRadios"></div></div>
+      <label class="f">Different day rate? (R) <input type="number" step="0.01" id="f_day_rate_override" placeholder="Blank = site rate"></label>
+      <label class="f">Performance bonus % <input type="number" step="1" id="f_pb_pct" placeholder="80 or 90"></label>
+      <label class="f">Deduct UIF? <select id="f_uif"><option value="yes">Yes</option><option value="no">No</option></select></label>
+    </div>
+    <h3 class="section">Where the salary goes</h3>
+    <div class="fgrid">
+      <label class="f">Bank * <input id="f_bank" list="banks"></label>
+      <label class="f">Account number * <input id="f_account" inputmode="numeric" autocomplete="off"></label>
+      <label class="f">Branch code <input id="f_branch" inputmode="numeric"></label>
+    </div>
+    <label class="f">Notes <textarea id="f_notes" rows="2"></textarea></label>
+    <div id="staffErr" class="notice bad" hidden></div>
+    <div id="leaveArea"></div>
+    <div class="bar">
+      <button type="button" id="staffCancel">Cancel</button>
+      <span class="spacer"></span>
+      <button type="submit" class="primary" id="staffSave">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- START NEXT MONTH -->
+<dialog id="resetDlg">
+  <div class="stack" style="padding:20px">
+    <h2 id="resetTitle">Finished with this month?</h2>
+    <p>This clears everything typed in for this month: leave, absent days, Sundays, overtime, public holidays, late minutes, bonuses and notes. It then opens <b id="resetNext"></b> with everyone on a full month.</p>
+    <p class="muted">Staff, bank details and pay rates stay exactly as they are.</p>
+    <div class="notice warn">Once cleared, this month's figures are gone from the site. Keep the Excel file and payslips you saved.</div>
+    <button class="big" id="resetExport" type="button">Export this month to Excel first</button>
+    <label class="radios"><label><input type="checkbox" id="resetExported"> I've saved the Excel file and the payslips</label></label>
+    <div class="bar"><button type="button" id="resetCancel">Not yet</button><span class="spacer"></span><button type="button" class="danger" id="resetGo" disabled>Clear and start next month</button></div>
+  </div>
+</dialog>
+
+<datalist id="banks"><option>Capitec</option><option>FNB</option><option>Nedbank</option><option>Standard Bank</option><option>ABSA</option><option>TymeBank</option><option>Mukuru</option><option>African Bank</option><option>Discovery Bank</option></datalist>
+<datalist id="occs"><option>Cleaner</option><option>Cleaner/Gardener</option><option>Gardener</option><option>Supervisor</option></datalist>
+
+<!-- Payslips are placed here only while printing -->
+<div id="printArea"></div>
+
+<script src="config.js"></script>
+<script src="demo-data.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+# Contains staff bank details. Run it in Supabase, then delete it. Never upload it.
+setup/2-your-staff.sql
