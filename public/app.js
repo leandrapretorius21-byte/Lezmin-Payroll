@@ -32,6 +32,9 @@ const SITE_NAMES = { O: "Ormonde", X: "Xavier" };
 let company = { ...DEFAULT_COMPANY };
 let cols = [];      // [{ key, label, kind }]  kind: name|known|emp|id|dob|occ|site|start|bank|account|branch|phone|earn|ded|count|net|totEarn|totDed|text
 let people = [];    // [{ id, v: { key: value } }]
+let deptFilter = "";
+const deptOf = p => String(p.v["dept|dept"] ?? val(p, "dept") ?? "").trim();
+const shown = () => people.filter(p => !deptFilter || deptOf(p) === deptFilter);
 let month = prevMonth(), payDate = "", fileName = "", headerImg = null, seq = 0, cseq = 0;
 const newId = () => "p" + (++seq);
 
@@ -52,26 +55,27 @@ const netOf = p => val(p, "net");
 // where its value goes on the payslip. Nothing is worked out or changed.
 // =====================================================================
 const norm = s => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-const letters = s => norm(s).replace(/[^a-z一-鿿]/g, "");
+const letters = s => norm(s).replace(/[^a-z0-9一-鿿]/g, "");
 function classifyHeader(h) {
   const t = norm(h);
   if (!t) return null;
-  if (/^(no\.?|nr\.?|#|部门编号|count)$/.test(t)) return "skip";
-  if (/^(name|names|full name|employee name|employee|name and surname|name & surname|naam|staff|staff name|worker)$/.test(t)) return "name";
-  if (/^(first name|firstname|name\(s\))$/.test(t)) return "first";
+  if (/^(no\.?|nr\.?|#|部门编号|count|item)$/.test(t)) return "skip";
+  if (/^(name|names|full name|employee name|employee|employees|name and surname|name & surname|names and surnames|naam|staff|staff name|worker|worker name)$/.test(t)) return "name";
+  if (/^(first name|firstname|first names|name\(s\))$/.test(t)) return "first";
   if (/^(surname|last name|lastname)$/.test(t)) return "last";
   if (/known as|nickname/.test(t)) return "known";
   if (/^(emp\.? ?no\.?|employee ?(no\.?|number|code|nr)|emp ?(number|code)|staff ?(no\.?|number|code)|number|code|clock ?(no|number))$/.test(t)) return "emp";
   if (/^(id|i\.?d\.?( no\.?| number)?|id ?(no|number|nr)\.?|identity( number)?|passport( no\.?| number)?)$/.test(t)) return "id";
   if (/birth|^dob$/.test(t)) return "dob";
   if (/^(occupation|position|job( title)?|role|title)$/.test(t)) return "occ";
+  if (/^(department|dept|section|division)$/.test(t)) return "dept";
   if (/ormonde|xavier|^site$|^location$|^workplace$|^area$/.test(t)) return "site";
   if (/start/.test(t)) return "start";
   if (/^(bank|bank list|bank name|banck|bank details|banck details)$/.test(t)) return "bank";
   if (/account|acc ?no|acc\.? number/.test(t)) return "account";
   if (/branch/.test(t)) return "branch";
   if (/^(phone|cell|cellphone|cell no|contact( no)?|tel)$/.test(t)) return "phone";
-  if (/^(notes?|comments?|remarks?)$/.test(t)) return "note";
+  if (/^(notes?|comments?|remarks?|reason)$/.test(t)) return "note";
   if (/money transfer|net ?pay|^nett?( pay| salary| amount| wage)?$|take ?home|amount (paid|to pay)|^to pay$|^transfer$|^payout$/.test(t)) return "net";
   if (/total deduction/.test(t)) return "totDed";
   if (/^(total|totals|total earnings|total payments|gross|gross (pay|salary|earnings)|total (salary|pay|income))$/.test(t)) return "totEarn";
@@ -80,7 +84,7 @@ function classifyHeader(h) {
 }
 const DED_WORDS = /uif|paye|tax|deduct|loan|advance|unpaid|absent|late|medical|pension|garnish|union|fine|shortage|damage|less|repay|owing/;
 const MONEY_WORDS = /pay|salary|wage|amount|deduct|bonus|commission|allowance|uif|paye|tax|loan|advance|rand|\(r\)|^r$|fee|incentive/;
-const COUNT_WORDS = /day|leave|absent|sunday|holiday|hour|hrs|minute|\bmin\b|\(min|late|ph\b|shift|times/;
+const COUNT_WORDS = /day|leave|absent|sunday|holiday|hour|hrs|minute|\bmin\b|\(min|late|ph\b|shift|times|overtime|\bot\b/;
 function decideNumberKind(header, values) {
   const t = norm(header);
   const nums = values.map(toNum).filter(n => n !== null && n !== 0);
@@ -88,13 +92,16 @@ function decideNumberKind(header, values) {
   if (texts.length > nums.length) return "text";
   if (MONEY_WORDS.test(t)) return DED_WORDS.test(t) ? "ded" : "earn";
   if (/hour|hrs|minute|\bmin\b|\(min/.test(t)) return "count";
-  if (COUNT_WORDS.test(t) && nums.every(n => Math.abs(n) <= 31 && Number.isInteger(n * 2))) return "count";
+  if (COUNT_WORDS.test(t) && nums.every(n => Math.abs(n) <= 60 && Number.isInteger(n * 2))) return "count";
   if (!nums.length && COUNT_WORDS.test(t)) return "count";
   return DED_WORDS.test(t) ? "ded" : "earn";
 }
+const tidyCase = s => { s = String(s ?? "").replace(/\s+/g, " ").trim(); return s && s === s.toUpperCase() && /[A-Z]{3,}/.test(s) && !/\d/.test(s) ? s.toLowerCase().replace(/(^|[\s\-(/])\S/g, c => c.toUpperCase()) : s; };
+// "R30.23   MAINTENANCE DEPARTMENT" -> "Maintenance Department"
+const cleanSection = s => tidyCase(String(s).replace(/^\s*(r\s?)?[\d.,]+\s+/i, ""));
 
 function findHeaderRow(rows) {
-  for (let r = 0; r < Math.min(rows.length, 50); r++) {
+  for (let r = 0; r < Math.min(rows.length, 60); r++) {
     const kinds = (rows[r] || []).map(classifyHeader);
     if (kinds.includes("name") || (kinds.includes("first") && kinds.includes("last"))) return r;
   }
@@ -103,65 +110,86 @@ function findHeaderRow(rows) {
 function splitKnownAs(raw) {
   const s = String(raw || "").trim(); let known = "";
   const m = s.match(/\(([^)]+)\)/); if (m) known = m[1].trim();
-  const clean = s.replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
-  const title = t => t && t === t.toUpperCase() ? t.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : t;
-  return { name: title(clean), known: known && known.length > 2 ? title(known) : "" };
+  const clean = s.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  return { name: tidyCase(clean), known: known && known.length > 2 ? tidyCase(known) : "" };
 }
 const nameKey = s => splitKnownAs(s).name.toLowerCase().replace(/[^a-z]/g, "");
 function parseDateish(v) {
   if (isBlank(v)) return "";
   if (typeof v === "number" && v > 20000 && v < 80000) return new Date(Date.UTC(1899, 11, 30) + v * 864e5).toISOString().slice(0, 10);
   const s = String(v).trim();
-  const m = s.match(/^([A-Za-z]{3})[A-Za-z]*[.\s-]+(\d{4})$/);       // AUG.2023
+  const m = s.match(/^([A-Za-z]{3})[A-Za-z]*[.,\s-]+(\d{4})$/);       // AUG.2023, APR,2026
   if (m) { const i = MONTHS.findIndex(x => x.slice(0, 3).toLowerCase() === m[1].toLowerCase()); if (i >= 0) return `${m[2]}-${String(i + 1).padStart(2, "0")}`; }
   return s;
 }
 
-// Read one tab into { cols, rows: [{ rowNo, key, v }] }
+// Read one tab: every column, every person row, and the section (department) each person sits under.
 function readTab(rows, tabName) {
   const hr = findHeaderRow(rows); if (hr < 0) return null;
   const header = rows[hr] || [];
-  const body = [];
   const nameIdx = header.findIndex(h => classifyHeader(h) === "name");
   const firstIdx = header.findIndex(h => classifyHeader(h) === "first"), lastIdx = header.findIndex(h => classifyHeader(h) === "last");
+  const leftMost = nameIdx >= 0 ? nameIdx : Math.min(...[firstIdx, lastIdx].filter(i => i >= 0));
+  // a title just above the headings (e.g. "SECURITY DEPARTMENT") is the default section; otherwise the tab name
+  let title = "";
+  for (let r = hr - 1; r >= 0 && !title; r--) { const cells = (rows[r] || []).filter(c => !isBlank(c)); if (cells.length === 1 && toNum(cells[0]) === null) title = String(cells[0]); }
+  let section = title && !/\d/.test(title) ? cleanSection(title) : tidyCase(tabName);
+  const body = [];
   for (let r = hr + 1; r < rows.length; r++) {
     const row = rows[r] || [];
+    const filled = row.map((c, j) => [c, j]).filter(([c]) => !isBlank(c));
+    if (!filled.length) continue;
+    if (filled.some(([c]) => /^key$/i.test(String(c).trim()))) break;            // the rates/key box at the bottom: stop
     const raw = nameIdx >= 0 ? row[nameIdx] : [row[firstIdx], row[lastIdx]].filter(x => !isBlank(x)).join(" ");
-    const nm = String(raw ?? "").trim();
-    if (!nm) continue;
-    if (/^(total|totals|grand total|key|cleaner|cleaners)$/i.test(nm)) continue;
-    if (toNum(nm) !== null) continue;
-    body.push({ r, row, nm });
+    const nm = String(raw ?? "").replace(/\s+/g, " ").trim();
+    if (!nm || toNum(nm) !== null) {
+      // a row with only one piece of text is a section heading, e.g. OFFICE STAFF or WESSEL ROAD
+      if (filled.length === 1 && toNum(filled[0][0]) === null && !/total/i.test(filled[0][0])) section = cleanSection(filled[0][0]);
+      continue;
+    }
+    if (/^(total|totals|grand total|sub ?total)$/i.test(nm)) continue;
+    if (classifyHeader(nm) === "name") continue;                                  // a repeated heading row
+    if (filled.length === 1 && filled[0][1] === nameIdx && /^[A-Z0-9 &'.-]+$/.test(nm) && rows.slice(r + 1).some(x => !isBlank(x?.[nameIdx]))) {
+      // a section heading typed in the name column (all capitals, nothing else on the row)
+      const after = rows[r + 1] || []; if (isBlank(after[nameIdx]) || after.filter(c => !isBlank(c)).length > 1) { section = cleanSection(nm); continue; }
+    }
+    body.push({ r, row, nm, section });
   }
   if (!body.length) return null;
   const out = [];
   let bankIdx = -1;
-  header.forEach((h, j) => {
+  const width = Math.max(header.length, ...body.map(b => b.row.length));
+  for (let j = 0; j < width; j++) {
+    const h = header[j];
     let kind = classifyHeader(h);
     if (kind === "bank") bankIdx = j;
-    if (kind === null) {   // headerless column: the two right after BANK are account and branch
-      if (bankIdx >= 0 && j === bankIdx + 1 && !header.some(x => classifyHeader(x) === "account")) kind = "account";
-      else if (bankIdx >= 0 && j === bankIdx + 2 && !header.some(x => classifyHeader(x) === "branch")) kind = "branch";
-      else return;
-    }
-    if (kind === "skip" || kind === "first" || kind === "last") return;
     const values = body.map(b => b.row[j]);
+    if (values.every(isBlank)) continue;                                           // nothing in this column
+    let label = tidyCase(h).replace(/\b(uif|paye|pb|ph|id|ot)\b/gi, w => w.toUpperCase());
+    if (kind === null) {                                                            // a column with no heading but with data in it
+      if (j < leftMost) continue;                                                   // running numbers in front of the names
+      if (bankIdx >= 0 && j === bankIdx + 1 && !header.some(x => classifyHeader(x) === "account")) { kind = "account"; label = "Account"; }
+      else if (bankIdx >= 0 && j === bankIdx + 2 && !header.some(x => classifyHeader(x) === "branch")) { kind = "branch"; label = "Branch code"; }
+      else {
+        const nums = values.map(toNum).filter(n => n !== null && n !== 0), texts = values.filter(v => !isBlank(v) && toNum(v) === null);
+        if (texts.length >= nums.length) { kind = "text"; label = "Note"; }
+        else if (nums.every(n => n < 0)) { kind = "ded"; label = "Deductions"; }
+        else { kind = "earn"; label = "Other amount"; }
+      }
+    }
+    if (kind === "skip" || kind === "first" || kind === "last" || kind === "name") continue;
     if (kind === "number?") kind = decideNumberKind(h, values);
     if (kind === "note") kind = "text";
-    if (values.every(isBlank)) return;                  // nothing in this column
-    if ((kind === "earn" || kind === "ded") && values.every(isZeroOrBlank)) return;   // all zero: leave off
-    let label = String(h || ({ account: "Account", branch: "Branch code" })[kind] || "").replace(/\s+/g, " ").trim();
-    if (label === label.toUpperCase() && /[A-Z]{4,}/.test(label)) label = label.toLowerCase().replace(/^./, c => c.toUpperCase()).replace(/\b(uif|paye|pb|ph|id|ot)\b/gi, w => w.toUpperCase());
-    out.push({ j, label, kind, tab: tabName });
-  });
-  const noIdx = header.findIndex(h => classifyHeader(h) === "skip");
+    if ((kind === "earn" || kind === "ded") && values.every(isZeroOrBlank)) continue;   // all zero: leave off
+    out.push({ j, label: label || "Other", kind });
+  }
+  const noIdx = header.findIndex((h, j) => classifyHeader(h) === "skip" && j < leftMost + 1);
   const people = body.map(b => {
-    const v = {};
-    out.forEach(c => { let x = b.row[c.j]; if (c.kind === "start" || c.kind === "dob") x = parseDateish(x); v[c.label + "|" + c.kind] = x; });
-    const sk = splitKnownAs(b.nm);
-    return { rowNo: noIdx >= 0 ? toNum(b.row[noIdx]) : null, rawName: b.nm, name: sk.name, known: sk.known, key: nameKey(b.nm), v };
+    const sk = splitKnownAs(b.nm), vals = {};
+    out.forEach((c, i) => { let x = b.row[c.j]; if (c.kind === "start" || c.kind === "dob") x = parseDateish(x); if (typeof x === "string") x = x.trim(); vals[i] = x; });
+    return { rowNo: noIdx >= 0 ? toNum(b.row[noIdx]) : null, rawName: b.nm, name: sk.name, known: sk.known, key: nameKey(b.nm), section: b.section, vals };
   });
-  return { tab: tabName, cols: out.filter(c => c.kind !== "name"), people, hasNet: out.some(c => c.kind === "net") };
+  return { tab: tabName, cols: out, people, hasNet: out.some(c => c.kind === "net") };
 }
 
 function similarLabel(a, b) {
@@ -172,13 +200,25 @@ function similarLabel(a, b) {
   for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
   return d[a.length][b.length] <= 2;
 }
-function matchScore(a, b) {
-  let s = 0;
-  if (a.key && b.key) { if (a.key === b.key) s = 4; else if (a.key.includes(b.key) || b.key.includes(a.key)) s = 3; else if (a.key.slice(0, 5) === b.key.slice(0, 5)) s = 1; }
-  const wa = splitKnownAs(a.rawName || a.name).name.toLowerCase().split(/\s+/).filter(w => w.length > 3), wb = splitKnownAs(b.rawName || b.name).name.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-  if (s < 3 && wa.some(w => wb.includes(w))) s = Math.max(s, 2);   // same surname or first name, e.g. "Winne Khumbuzile Ndlela" / "Winnie Ndlela"
-  if (a.rowNo != null && a.rowNo === b.rowNo) s += 2;
-  return s;
+const words = s => splitKnownAs(s).name.toLowerCase().split(/[\s-]+/).map(w => w.replace(/[^a-z]/g, "")).filter(w => w.length > 3);
+const SECTION_FILLER = /^(department|departments|dept|staff|section|division|team|workers|employees|road|street|site)$/;
+function sameSection(a, b) {
+  const sw = s => norm(s).split(/[^a-z]+/).filter(w => w.length > 3 && !SECTION_FILLER.test(w));
+  const wa = sw(a), wb = sw(b);
+  return wa.some(x => wb.some(y => x === y || x.startsWith(y) || y.startsWith(x)));
+}
+// How sure are we that two rows (on different tabs) are the same person?
+function matchScore(p, q) {
+  let n = 0;
+  const keys = [p.key, ...(p.altKeys || [])];
+  if (keys.includes(q.key)) n = 4;
+  else if (keys.some(k => k && q.key && (k.includes(q.key) || q.key.includes(k)) && Math.min(k.length, q.key.length) >= 4)) n = 3;
+  else if ((p.words || []).some(w => words(q.rawName).includes(w))) n = 2;
+  else if (keys.some(k => k && q.key && k.slice(0, 5) === q.key.slice(0, 5) && q.key.length >= 5)) n = 1;
+  if (q.known && (p.words || []).includes(q.known.toLowerCase())) n = Math.max(n, 3);
+  const row = p.rowNos.some(x => x != null && x === q.rowNo), sec = p.sections.some(s => sameSection(s, q.section));
+  const score = n + (row ? 2 : 0) + (sec ? 2 : 0);
+  return (n >= 3 || (n >= 1 && (row || sec)) || (row && sec)) && score >= 4 ? score : 0;
 }
 
 function readWorkbook(wb) {
@@ -186,50 +226,72 @@ function readWorkbook(wb) {
   const tabs = wb.SheetNames.map(n => ({ n, rows: X.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }) }));
   // Pay month and pay date, if the sheet says them anywhere
   let period = "", pay = "";
+  const mIdx = s => MONTHS.findIndex(x => x.slice(0, 3).toLowerCase() === s.slice(0, 3).toLowerCase()) + 1;
   tabs.forEach(({ rows }) => rows.slice(0, 60).forEach(row => row.forEach(c => {
     const s = String(c);
     const cn = s.match(/(\d{4})年(\d{1,2})月.*?(\d{4})年(\d{1,2})月(\d{1,2})日/);
-    if (cn && !period) { period = `${cn[1]}-${cn[2].padStart(2, "0")}`; pay = `${cn[3]}-${cn[4].padStart(2, "0")}-${cn[5].padStart(2, "0")}`; }
+    if (cn && !pay) { if (!period) period = `${cn[1]}-${cn[2].padStart(2, "0")}`; pay = `${cn[3]}-${cn[4].padStart(2, "0")}-${cn[5].padStart(2, "0")}`; }
     const en = s.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d{2})\b/i);
-    if (en && !period && /salar|pay|wage/i.test(s)) period = `${en[2]}-${String(MONTHS.findIndex(x => x.slice(0, 3).toLowerCase() === en[1].toLowerCase()) + 1).padStart(2, "0")}`;
+    if (en && !period && /salar|pay|wage/i.test(s)) period = `${en[2]}-${String(mIdx(en[1])).padStart(2, "0")}`;
   })));
-  if (!period) { const m = String(wb.__fileName || "").match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*(20\d{2})/i); if (m) period = `${m[2]}-${String(MONTHS.findIndex(x => x.slice(0, 3).toLowerCase() === m[1].toLowerCase()) + 1).padStart(2, "0")}`; }
+  if (!period) { const m = String(wb.__fileName || "").match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*(20\d{2})/i); if (m) period = `${m[2]}-${String(mIdx(m[1])).padStart(2, "0")}`; }
 
   const read = tabs.map(t => readTab(t.rows, t.n)).filter(Boolean);
   if (!read.length) throw new Error("Couldn't find a list of people in this file. One of the tabs needs a heading row with a NAME column.");
-  // The main tab is the one with a net pay / money transfer column, otherwise the one with the most columns
-  read.sort((a, b) => (b.hasNet - a.hasNet) || (b.cols.length - a.cols.length));
-  const main = read[0];
 
-  // Columns: the main tab's, then any extra ones from other tabs that the main tab doesn't already have
+  // 1. One shared list of columns. Same kind + similar heading on different tabs = the same column.
   const allCols = [];
-  const addCol = c => { if (!allCols.some(x => x.kind === c.kind && similarLabel(x.label, c.label))) allCols.push({ ...c, key: c.label + "|" + c.kind }); };
-  main.cols.forEach(addCol);
-  const ppl = main.people.map(p => ({ id: newId(), name: p.name, rawName: p.rawName, known: p.known, rowNo: p.rowNo, key: p.key, v: { ...p.v } }));
-  const notes = [];
-  read.slice(1).forEach(t => {
-    const before = allCols.length; t.cols.forEach(addCol);
-    const newCols = allCols.slice(before);
-    if (!newCols.length) return;
-    const used = new Set();
-    ppl.forEach(p => {
-      let best = null, bs = 0;
-      t.people.forEach(q => { if (used.has(q)) return; const s = matchScore(p, q); if (s > bs) { bs = s; best = q; } });
-      if (!best || bs < 3) return;
-      used.add(best);
-      newCols.forEach(c => { const src = Object.keys(best.v).find(k => k === c.label + "|" + c.kind) || Object.keys(best.v).find(k => k.endsWith("|" + c.kind) && similarLabel(k.split("|")[0], c.label)); if (src) p.v[c.key] = best.v[src]; });
-      if (best.name.split(" ").length > p.name.split(" ").length) p.name = best.name;   // keep the fuller name
-      if (!p.known && best.known) p.known = best.known;
+  read.forEach(t => {
+    const taken = new Set();
+    t.map = t.cols.map(c => {
+      let g = allCols.find(x => x.kind === c.kind && similarLabel(x.label, c.label) && !taken.has(x.key));
+      if (!g) { g = { key: c.label + "|" + c.kind + "|" + allCols.length, label: c.label, kind: c.kind }; allCols.push(g); }
+      taken.add(g.key); return g.key;
     });
   });
 
-  // Put name / known-as into fixed columns so they can be edited like everything else
+  // 2. One list of people. Every row on every tab becomes a payslip; rows on different tabs for the same person are joined.
+  const ppl = [];
+  read.forEach((t, ti) => {
+    const pri = t.hasNet ? 1 : 0;   // when two tabs disagree, the tab with the net pay column wins
+    const free = ppl.filter(p => !p.tabs.has(ti));
+    const pairs = [];
+    t.people.forEach(q => free.forEach(p => { const s = matchScore(p, q); if (s) pairs.push([s, p, q]); }));
+    pairs.sort((a, b) => b[0] - a[0]);
+    const usedP = new Set(), usedQ = new Set(), matched = new Map();
+    pairs.forEach(([, p, q]) => { if (usedP.has(p) || usedQ.has(q)) return; usedP.add(p); usedQ.add(q); matched.set(q, p); });
+    t.people.forEach(q => {
+      let p = matched.get(q);
+      if (!p) { p = { id: newId(), name: q.name, known: q.known, key: q.key, altKeys: [], words: [], rowNos: [], sections: [], section: q.section, tabs: new Set(), cand: {} }; ppl.push(p); }
+      p.tabs.add(ti); p.rowNos.push(q.rowNo); p.sections.push(q.section);
+      p.altKeys.push(q.key); p.words.push(...words(q.rawName)); if (q.known) p.words.push(q.known.toLowerCase());
+      if (q.name.split(" ").length > p.name.split(" ").length) p.name = q.name;   // keep the fuller name
+      if (!p.known && q.known) p.known = q.known;
+      if (p.known && p.name.toLowerCase().split(" ").includes(p.known.toLowerCase())) p.known = "";
+      t.cols.forEach((c, i) => { const k = t.map[i], x = q.vals[i]; if (isBlank(x)) return; (p.cand[k] = p.cand[k] || []).push({ x, pri }); });
+    });
+  });
+
+  // 3. Each person's value for each column: copied as written. If two tabs both have a (non-zero) value, the net-pay tab's wins.
+  const people = ppl.map(p => {
+    const v = { "name|name": p.name };
+    if (p.known) v["known|known"] = p.known;
+    if (p.section) v["dept|dept"] = p.section;
+    Object.entries(p.cand).forEach(([k, list]) => {
+      const nz = list.filter(c => !isZeroOrBlank(c.x)).sort((a, b) => b.pri - a.pri);
+      v[k] = (nz[0] || list[0]).x;
+    });
+    return { id: p.id, v };
+  });
+
   const result = [{ key: "name|name", label: "Name", kind: "name" }];
-  if (!allCols.some(c => c.kind === "known") && ppl.some(p => p.known)) result.push({ key: "known|known", label: "Known as", kind: "known" });
-  result.push(...allCols);
-  ppl.forEach(p => { p.v["name|name"] = p.name; if (p.known && !p.v["known|known"]) p.v["known|known"] = p.known; });
+  if (!allCols.some(c => c.kind === "known") && people.some(p => p.v["known|known"])) result.push({ key: "known|known", label: "Known as", kind: "known" });
+  if (!allCols.some(c => c.kind === "dept") && new Set(people.map(p => p.v["dept|dept"])).size > 1) result.push({ key: "dept|dept", label: "Department", kind: "dept" });
+  result.push(...allCols.filter(c => people.some(p => !isBlank(p.v[c.key]))));
+  const notes = [];
   if (!result.some(c => c.kind === "net")) notes.push("No net pay column was found (for example NET PAY or MONEY TRANSFER), so the payslips have no net pay amount. Add that column to the sheet, or type it in per person.");
-  return { cols: result, people: ppl.map(p => ({ id: p.id, v: p.v })), period, pay, notes };
+  else { const n = people.filter(p => isBlank(p.v[result.find(c => c.kind === "net").key])).length; if (n) notes.push(`${n} ${n === 1 ? "person has" : "people have"} no net pay in the sheet. Their payslips show "—" until you type it in.`); }
+  return { cols: result, people, period, pay, notes, tabs: read.map(t => t.tab) };
 }
 
 async function importFile(file) {
@@ -259,7 +321,14 @@ function renderMonth() {
   $("#monthTitle").textContent = monthLabel(month) || "Payslips";
   $("#periodInput").value = month || ""; $("#payDate").value = payDate || "";
   $("#fileNote").textContent = fileName ? `From ${fileName}` : "Added by hand";
-  $("#monthList").innerHTML = people.map(p => `<div class="row" data-id="${p.id}"><button class="rowhead">${rowHeadHTML(p)}</button></div>`).join("");
+  const depts = [...new Set(people.map(deptOf).filter(Boolean))];
+  if (deptFilter && !depts.includes(deptFilter)) deptFilter = "";
+  $("#deptWrap").hidden = depts.length < 2;
+  $("#deptFilter").innerHTML = `<option value="">All departments (${people.length})</option>` + depts.map(d => `<option value="${esc(d)}" ${d === deptFilter ? "selected" : ""}>${esc(d)} (${people.filter(p => deptOf(p) === d).length})</option>`).join("");
+  let last = null;
+  $("#monthList").innerHTML = shown().map(p => { const d = deptOf(p); const head = depts.length > 1 && d !== last ? `<h3 class="grouphead">${esc(d || "Other")}</h3>` : ""; last = d; return head + `<div class="row" data-id="${p.id}"><button class="rowhead">${rowHeadHTML(p)}</button></div>`; }).join("");
+  const n = shown().length, lbl = deptFilter ? ` (${n})` : "";
+  $("#printAll").textContent = (deptFilter ? "Print " + deptFilter : "Print all payslips") + lbl;
   renderTotals();
 }
 function rowHeadHTML(p) {
@@ -274,25 +343,26 @@ function rowHeadHTML(p) {
     <div class="money">${isBlank(net) ? "—" : "R " + esc(fmtMoney(net))}<small>net pay</small></div><span class="chev" aria-hidden="true">›</span>`;
 }
 function renderTotals() {
-  const sum = kind => { const c = colOf(kind); if (!c) return null; return people.reduce((a, p) => a + (toNum(p.v[c.key]) || 0), 0); };
+  const sum = kind => { const c = colOf(kind); if (!c) return null; return shown().reduce((a, p) => a + (toNum(p.v[c.key]) || 0), 0); };
   const net = sum("net"), gross = sum("totEarn");
-  $("#totals").innerHTML = `<div><small>Payslips</small><b>${people.length}</b></div>` + (gross !== null ? `<div><small>Total earnings (sheet)</small><b>R ${fmtMoney(gross)}</b></div>` : "") + (net !== null ? `<div class="net"><small>Total net pay (sheet)</small><b>R ${fmtMoney(net)}</b></div>` : "");
+  $("#totals").innerHTML = `<div><small>Payslips</small><b>${shown().length}</b></div>` + (gross !== null ? `<div><small>Total earnings (sheet)</small><b>R ${fmtMoney(gross)}</b></div>` : "") + (net !== null ? `<div class="net"><small>Total net pay (sheet)</small><b>R ${fmtMoney(net)}</b></div>` : "");
 }
 $("#monthList").addEventListener("click", ev => { const r = ev.target.closest(".row"); if (r) openPerson(r.dataset.id); });
+$("#deptFilter").addEventListener("change", ev => { deptFilter = ev.target.value; renderMonth(); });
 $("#periodInput").addEventListener("change", ev => { month = ev.target.value; renderMonth(); });
 $("#payDate").addEventListener("change", ev => { payDate = ev.target.value; });
 $("#clearBtn").addEventListener("click", () => $("#clearDlg").showModal());
-$("#clearYes").addEventListener("click", () => { people = []; cols = []; fileName = ""; payDate = ""; banner(""); $("#clearDlg").close(); renderAll(); toast("Cleared. Nothing was kept."); });
+$("#clearYes").addEventListener("click", () => { people = []; cols = []; fileName = ""; payDate = ""; deptFilter = ""; banner(""); $("#clearDlg").close(); renderAll(); toast("Cleared. Nothing was kept."); });
 $("#clearNo").addEventListener("click", () => $("#clearDlg").close());
 window.addEventListener("beforeunload", ev => { if (people.length) { ev.preventDefault(); ev.returnValue = ""; } });
 
 // ---------- one person: check, fix, add (no fields are required) ----------
 const GROUPS = [
-  ["Details", ["name", "known", "emp", "id", "dob", "occ", "site", "start", "phone"]],
+  ["Details", ["name", "known", "emp", "dept", "id", "dob", "occ", "site", "start", "phone"]],
   ["Earnings", ["earn"]], ["Deductions", ["ded"]], ["Totals and net pay", ["totEarn", "totDed", "net"]],
   ["Days, leave and hours", ["count"]], ["Bank", ["bank", "account", "branch"]], ["Other", ["text"]],
 ];
-const KIND_LABEL = { name: "Name", known: "Known as", emp: "Employee number", id: "ID number", dob: "Date of birth", occ: "Occupation", site: "Site", start: "Start date", phone: "Phone", bank: "Bank", account: "Account number", branch: "Branch code", net: "Net pay", totEarn: "Total earnings", totDed: "Total deductions" };
+const KIND_LABEL = { dept: "Department", name: "Name", known: "Known as", emp: "Employee number", id: "ID number", dob: "Date of birth", occ: "Occupation", site: "Site", start: "Start date", phone: "Phone", bank: "Bank", account: "Account number", branch: "Branch code", net: "Net pay", totEarn: "Total earnings", totDed: "Total deductions" };
 const DEFAULT_COLS = () => [["name", "Name"], ["emp", "Employee number"], ["site", "Site"], ["count", "Days worked"], ["earn", "Basic salary"], ["ded", "UIF"], ["net", "Net pay"], ["bank", "Bank"], ["account", "Account number"], ["branch", "Branch code"]].map(([kind, label]) => ({ key: label + "|" + kind, label, kind }));
 let editing = null;
 function ensureCol(kind) { let c = colOf(kind); if (!c) { c = { key: (KIND_LABEL[kind] || kind) + "|" + kind, label: KIND_LABEL[kind] || kind, kind }; cols.push(c); } return c; }
@@ -350,7 +420,7 @@ $("#staffList").addEventListener("click", ev => { const b = ev.target.closest("[
 // ---------- payslip content (copied straight from the sheet) ----------
 function slip(p) {
   const info = [["Employee", nameOf(p) + (val(p, "known") ? ` (${val(p, "known")})` : "")], ["Pay period", monthLabel(month) || "—"], ["Paid on", payDate ? fmtDate(payDate) : "—"]];
-  ["emp", "site", "id", "start", "dob", "occ", "phone"].forEach(k => cols.filter(c => c.kind === k).forEach(c => {
+  ["emp", "dept", "site", "id", "start", "dob", "occ", "phone"].forEach(k => cols.filter(c => c.kind === k).forEach(c => {
     let x = p.v[c.key]; if (isBlank(x)) return;
     if (k === "site") x = SITE_NAMES[String(x).trim().toUpperCase()] || x;
     if (k === "start" || k === "dob") x = fmtDate(x);
@@ -358,7 +428,7 @@ function slip(p) {
   }));
   colsOf("text").forEach(c => { if (!isBlank(p.v[c.key]) && /%/.test(c.label)) info.push([c.label, String(p.v[c.key])]); });
   const lines = kind => colsOf(kind).map(c => [c.label, p.v[c.key]]).filter(([, x]) => !isBlank(x));
-  const tot = kind => { const c = colOf(kind); return c && !isBlank(p.v[c.key]) ? p.v[c.key] : null; };
+  const tot = kind => { const c = colOf(kind); return c && !isZeroOrBlank(p.v[c.key]) ? p.v[c.key] : null; };
   const notes = colsOf("text").filter(c => !/%/.test(c.label) && !isBlank(p.v[c.key])).map(c => `${c.label}: ${p.v[c.key]}`);
   return {
     info, earn: lines("earn"), ded: lines("ded"), totEarn: tot("totEarn"), totDed: tot("totDed"),
@@ -391,7 +461,7 @@ function slipHTML(p) {
   </div>`;
 }
 function printSlips(ids) {
-  const list = people.filter(p => !ids || ids.includes(p.id));
+  const list = (ids ? people : shown()).filter(p => !ids || ids.includes(p.id));
   if (!list.length) return;
   $("#printArea").innerHTML = list.map(p => `<div class="sheet">${slipHTML(p)}</div>`).join(""); // one person per A4 page
   const imgs = [...$("#printArea").querySelectorAll("img")];
@@ -421,7 +491,7 @@ function drawSlip(doc, p, img) {
   s.info.forEach(([k, x], i) => {
     const r = Math.floor(i / 5), c = i % 5, yy = y + 8 + r * 13;
     doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(110); doc.text(fit(k.toUpperCase(), ws[c]), xs[c], yy);
-    doc.setTextColor(0); doc.setFontSize(10.5); doc.setFont("helvetica", "bold"); doc.text(fit(x || "—", ws[c]), xs[c], yy + 5.5);
+    doc.setTextColor(0); doc.setFont("helvetica", "bold"); let fs = 10.5; doc.setFontSize(fs); while (fs > 7 && doc.getTextWidth(String(x || "—")) > ws[c]) doc.setFontSize(fs -= 0.5); doc.text(fit(x || "—", ws[c]), xs[c], yy + 5.5);
   });
   y += 8 + Math.ceil(s.info.length / 5) * 13 - 2; doc.setDrawColor(0); doc.setLineWidth(0.4); doc.line(L, y, Rr, y);
   // earnings and deductions
@@ -476,14 +546,14 @@ async function buildPdf(list) {
   list.forEach((p, i) => { if (i) doc.addPage(); drawSlip(doc, p, img); });
   return doc;
 }
-$("#pdfAll").addEventListener("click", ev => busy(ev.currentTarget, async () => { const doc = await buildPdf(people); downloadBlob(doc.output("blob"), `Payslips ${monthLabel(month) || ""}.pdf`.replace(" .pdf", ".pdf")); }));
+$("#pdfAll").addEventListener("click", ev => busy(ev.currentTarget, async () => { const doc = await buildPdf(shown()); downloadBlob(doc.output("blob"), `Payslips ${deptFilter ? deptFilter + " " : ""}${monthLabel(month) || ""}.pdf`.replace(" .pdf", ".pdf")); }));
 $("#zipAll").addEventListener("click", ev => busy(ev.currentTarget, async () => {
   const zip = new window.JSZip(), used = new Set();
-  for (const p of people) {
+  for (const p of shown()) {
     let n = `${safeName(nameOf(p))} - ${monthLabel(month)}`; while (used.has(n)) n += " (2)"; used.add(n);
     zip.file(n + ".pdf", (await buildPdf([p])).output("arraybuffer"));
   }
-  downloadBlob(await zip.generateAsync({ type: "blob" }), `Payslips ${monthLabel(month)} (each person).zip`);
+  downloadBlob(await zip.generateAsync({ type: "blob" }), `Payslips ${deptFilter ? deptFilter + " " : ""}${monthLabel(month)} (each person).zip`);
 }));
 
 // ---------- Excel export (exactly what's on the page, including fixes) ----------

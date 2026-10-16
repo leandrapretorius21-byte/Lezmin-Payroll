@@ -44,7 +44,7 @@
       <!-- Before anything is imported -->
       <div id="emptyState" class="importbox">
         <h1>Import this month's salary sheet</h1>
-        <p class="muted">Choose the Excel file, for example <b>SEP 2026 salaries Cleaners.xlsx</b>. Every column in it is read and copied onto the payslips exactly as it is. Nothing is worked out or changed.</p>
+        <p class="muted">Choose the month's Excel file. Every tab, every person and every column in it is read and copied onto the payslips exactly as it is. Nothing is worked out or changed.</p>
         <button class="primary big" data-import>Import Excel sheet</button>
         <p class="muted small">You can also drag the file onto this page. Nothing is saved: when you close the page, it's gone.</p>
       </div>
@@ -57,6 +57,7 @@
             <h1 id="monthTitle" style="margin:0">—</h1>
           </div>
           <div class="bar">
+            <label class="f inline" id="deptWrap" hidden>Show <select id="deptFilter"></select></label>
             <label class="f inline">Month <input type="month" id="periodInput"></label>
             <label class="f inline">Pay date <input type="date" id="payDate"></label>
           </div>

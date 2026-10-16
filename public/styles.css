@@ -192,3 +192,6 @@ dialog h2 { margin: 0; }
 .importbox p { margin: 0; max-width: 60ch; }
 .chip.ok { background: var(--good-soft); color: var(--good); }
 .chip.bad { background: var(--bad-soft); color: var(--bad); }
+
+.grouphead{margin:18px 0 6px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
+#deptFilter{min-width:200px}
