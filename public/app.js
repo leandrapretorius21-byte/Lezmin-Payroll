@@ -32,7 +32,7 @@ const SITE_NAMES = { O: "Ormonde", X: "Xavier" };
 let company = { ...DEFAULT_COMPANY };
 let cols = [];      // [{ key, label, kind }]  kind: name|known|emp|id|dob|occ|site|start|bank|account|branch|phone|earn|ded|count|net|totEarn|totDed|text
 let people = [];    // [{ id, v: { key: value } }]
-let deptFilter = "";
+let deptFilter = "", keyInfo = { hourlyRate: null, siteHours: {}, workingDays: null };
 const deptOf = p => String(p.v["dept|dept"] ?? val(p, "dept") ?? "").trim();
 const shown = () => people.filter(p => !deptFilter || deptOf(p) === deptFilter);
 let month = prevMonth(), payDate = "", fileName = "", headerImg = null, seq = 0, cseq = 0;
@@ -134,12 +134,16 @@ function readTab(rows, tabName) {
   let title = "";
   for (let r = hr - 1; r >= 0 && !title; r--) { const cells = (rows[r] || []).filter(c => !isBlank(c)); if (cells.length === 1 && toNum(cells[0]) === null) title = String(cells[0]); }
   let section = title && !/\d/.test(title) ? cleanSection(title) : tidyCase(tabName);
-  const body = [];
+  const body = [], keyRows = [];
   for (let r = hr + 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const filled = row.map((c, j) => [c, j]).filter(([c]) => !isBlank(c));
     if (!filled.length) continue;
-    if (filled.some(([c]) => /^key$/i.test(String(c).trim()))) break;            // the rates/key box at the bottom: stop
+    if (filled.some(([c]) => /^key$/i.test(String(c).trim()))) {                 // the rates/key box at the bottom: read it, then stop
+      rows.slice(r + 1).forEach(kr => { const cells = (kr || []).filter(c => !isBlank(c)); const num = cells.map(toNum).find(n => n !== null), txt = cells.filter(c => toNum(c) === null).map(String);
+        if (num != null && txt.length) keyRows.push({ code: txt.find(t => /^[A-Z]$/.test(t.trim())) || "", label: txt.filter(t => !/^[A-Z]$/.test(t.trim())).join(" "), value: num }); });
+      break;
+    }
     const raw = nameIdx >= 0 ? row[nameIdx] : [row[firstIdx], row[lastIdx]].filter(x => !isBlank(x)).join(" ");
     const nm = String(raw ?? "").replace(/\s+/g, " ").trim();
     if (!nm || toNum(nm) !== null) {
@@ -189,7 +193,7 @@ function readTab(rows, tabName) {
     out.forEach((c, i) => { let x = b.row[c.j]; if (c.kind === "start" || c.kind === "dob") x = parseDateish(x); if (typeof x === "string") x = x.trim(); vals[i] = x; });
     return { rowNo: noIdx >= 0 ? toNum(b.row[noIdx]) : null, rawName: b.nm, name: sk.name, known: sk.known, key: nameKey(b.nm), section: b.section, vals };
   });
-  return { tab: tabName, cols: out, people, hasNet: out.some(c => c.kind === "net") };
+  return { tab: tabName, keyRows, cols: out, people, hasNet: out.some(c => c.kind === "net") };
 }
 
 function similarLabel(a, b) {
@@ -291,7 +295,13 @@ function readWorkbook(wb) {
   const notes = [];
   if (!result.some(c => c.kind === "net")) notes.push("No net pay column was found (for example NET PAY or MONEY TRANSFER), so the payslips have no net pay amount. Add that column to the sheet, or type it in per person.");
   else { const n = people.filter(p => isBlank(p.v[result.find(c => c.kind === "net").key])).length; if (n) notes.push(`${n} ${n === 1 ? "person has" : "people have"} no net pay in the sheet. Their payslips show "—" until you type it in.`); }
-  return { cols: result, people, period, pay, notes, tabs: read.map(t => t.tab) };
+  // The KEY box(es): hourly rate, hours per site, working days in the month (only used for "One day pay" and "Rate" on the payslip)
+  const key = { hourlyRate: null, siteHours: {}, workingDays: null };
+  read.forEach(t => t.keyRows.forEach(k => { const l = norm(k.label);
+    if (/hour\w*ly rate|hourtly rate|rate per hour/.test(l)) key.hourlyRate = key.hourlyRate ?? k.value;
+    else if (/working days|days in (the )?month/.test(l)) key.workingDays = key.workingDays ?? k.value;
+    else if (k.code && /hour/.test(l)) key.siteHours[k.code] = k.value; }));
+  return { cols: result, people, period, pay, notes, key, tabs: read.map(t => t.tab) };
 }
 
 async function importFile(file) {
@@ -301,7 +311,7 @@ async function importFile(file) {
     const wb = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
     wb.__fileName = file.name;
     const res = readWorkbook(wb);
-    cols = res.cols; people = res.people; month = res.period || month; payDate = res.pay || ""; fileName = file.name; cseq = 0;
+    cols = res.cols; people = res.people; keyInfo = res.key || keyInfo; month = res.period || month; payDate = res.pay || ""; fileName = file.name; cseq = 0;
     banner(res.notes.join(" "), "warn");
     renderAll(); showTab("month");
     toast(`Imported ${people.length} people from ${file.name}`);
@@ -417,47 +427,78 @@ function renderStaff() {
 $("#staffSearch").addEventListener("input", renderStaff);
 $("#staffList").addEventListener("click", ev => { const b = ev.target.closest("[data-id]"); if (b) openPerson(b.dataset.id); });
 
-// ---------- payslip content (copied straight from the sheet) ----------
+// The payslip, in the Lezmin format. Only these boxes and rows are filled; anything else in the sheet is left off.
+const EARN_ROWS = [
+  ["Basic Salary",    /basic|salary/,              null],
+  ["Sunday Overtime", /sunday/,                    /sunday/],
+  ["Overtime Pay",    /overtime|^ot\b|o\/t/,       /overtime|^ot\b|o\/t/],
+  ["Extra Day",       /extra/,                     /extra/],
+  ["Public Holidays", /public|holiday|^ph\b/,      /public|holiday|^ph\b/],
+];
+const DED_ROWS = [
+  ["UIF",               /uif/,                                  null],
+  ["PAYE",              /paye|tax/,                             null],
+  ["Others Deductions", /^(other|others)?\s*deductions?$|other.*deduct|loan|advance|fine|damage|shortage/, null],
+  ["Unpaid Leave",      /unpaid/,                               /unpaid/],
+  ["Absent Leave",      /absent/,                               /absent/],
+  ["Late",              /late/,                                 /late|minute/],
+];
+// How many days of each kind this month (shown only, nothing is worked out from these)
+const LEAVE_BOXES = [["Days worked", /days? worked|worked days/], ["Annual leave", /annual/], ["Sick leave", /sick/], ["Family resp. leave", /family/], ["Unpaid leave", /unpaid/], ["Absent days", /absent/], ["Public holidays", /public|holiday/]];
+const money = x => { const n = toNum(x); return n === null ? null : Math.abs(n); };
 function slip(p) {
-  const info = [["Employee", nameOf(p) + (val(p, "known") ? ` (${val(p, "known")})` : "")], ["Pay period", monthLabel(month) || "—"], ["Paid on", payDate ? fmtDate(payDate) : "—"]];
-  ["emp", "dept", "site", "id", "start", "dob", "occ", "phone"].forEach(k => cols.filter(c => c.kind === k).forEach(c => {
-    let x = p.v[c.key]; if (isBlank(x)) return;
-    if (k === "site") x = SITE_NAMES[String(x).trim().toUpperCase()] || x;
-    if (k === "start" || k === "dob") x = fmtDate(x);
-    info.push([KIND_LABEL[k] === "Employee number" ? "Number" : (KIND_LABEL[k] || c.label), String(x)]);
-  }));
-  colsOf("text").forEach(c => { if (!isBlank(p.v[c.key]) && /%/.test(c.label)) info.push([c.label, String(p.v[c.key])]); });
-  const lines = kind => colsOf(kind).map(c => [c.label, p.v[c.key]]).filter(([, x]) => !isBlank(x));
-  const tot = kind => { const c = colOf(kind); return c && !isZeroOrBlank(p.v[c.key]) ? p.v[c.key] : null; };
-  const notes = colsOf("text").filter(c => !/%/.test(c.label) && !isBlank(p.v[c.key])).map(c => `${c.label}: ${p.v[c.key]}`);
+  const used = new Set();
+  const take = (kinds, re) => { const c = cols.find(c => kinds.includes(c.kind) && !used.has(c.key) && re.test(norm(c.label)) && !isBlank(p.v[c.key])); if (!c) return null; used.add(c.key); return p.v[c.key]; };
+  const qty = re => { const c = cols.find(c => c.kind === "count" && re.test(norm(c.label)) && !isBlank(p.v[c.key])); return c ? toNum(p.v[c.key]) : null; };
+  // One day pay: a "day rate" column if the sheet has one, otherwise hours for their site x hourly rate from the KEY box
+  let dayRate = take(["earn", "text", "count"], /day ?rate|one day|daily|per day/);
+  if (dayRate == null) { const site = String(val(p, "site") || "").trim().toUpperCase(); const h = keyInfo.siteHours[site]; if (h != null && keyInfo.hourlyRate != null) dayRate = Math.round(h * keyInfo.hourlyRate * 100) / 100; }
+  const earn = EARN_ROWS.map(([label, re, qre], i) => { const amt = money(take(["earn"], re)); return { label, day: i === 0 ? toNum(dayRate) : null, qty: i === 0 ? keyInfo.workingDays : (qre ? qty(qre) : null), amt }; });
+  const ded = DED_ROWS.map(([label, re, qre]) => ({ label, qty: qre ? qty(qre) : null, amt: money(take(["ded"], re)) }));
+  // Any other amounts in the sheet (e.g. Performance Bonus, Commission, Loan) go on the empty lines, so the slip adds up
+  cols.filter(c => c.kind === "earn" && !used.has(c.key) && !isZeroOrBlank(p.v[c.key])).forEach(c => { used.add(c.key); earn.push({ label: c.label, day: null, qty: null, amt: money(p.v[c.key]) }); });
+  cols.filter(c => c.kind === "ded" && !used.has(c.key) && !isZeroOrBlank(p.v[c.key])).forEach(c => { used.add(c.key); ded.push({ label: c.label, qty: null, amt: money(p.v[c.key]) }); });
+  const sum = list => Math.round(list.reduce((a, r) => a + (r.amt || 0), 0) * 100) / 100;
+  const totPay = sum(earn), totDed = sum(ded);
+  const netSheet = netOf(p);
+  const occ = val(p, "occ") || deptOf(p);
   return {
-    info, earn: lines("earn"), ded: lines("ded"), totEarn: tot("totEarn"), totDed: tot("totDed"),
-    counts: colsOf("count").map(c => [c.label, p.v[c.key]]).filter(([, x]) => !isBlank(x)),
-    bank: val(p, "bank"), account: val(p, "account"), branch: val(p, "branch"), net: netOf(p), notes,
+    name: nameOf(p) + (val(p, "known") ? ` (${val(p, "known")})` : ""), number: val(p, "emp") || "",
+    id: val(p, "id") || "", start: fmtDate(val(p, "start")), dob: fmtDate(val(p, "dob")),
+    occ: occ || "", period: monthLabel(month) || "", tip: "Monthly", payDate: payDate ? fmtDate(payDate) : "",
+    earn, ded, totPay, totDed, net: isBlank(netSheet) ? Math.round((totPay - totDed) * 100) / 100 : toNum(netSheet) ?? netSheet,
+    leave: LEAVE_BOXES.map(([label, re]) => [label, qty(re) || 0]),
+    bank: val(p, "bank") || "", account: val(p, "account") || "", branch: val(p, "branch") || "",
   };
 }
+const R$ = n => n == null || n === 0 ? "-" : "R " + fmtMoney(n);
+const qtyTxt = n => n == null || n === 0 ? "" : fmtCount(n);
 
 // ---------- printing ----------
 function slipHTML(p) {
   const s = slip(p), C = company;
-  const rows = Math.max(s.earn.length, s.ded.length, 1);
-  const tr = ([l, x]) => `<tr class="${toNum(x) ? "" : "zero"}"><td>${esc(l)}</td><td class="r">${esc(fmtMoney(x))}</td></tr>`;
-  const pad = n => Array.from({ length: Math.max(0, n) }, () => `<tr><td>&nbsp;</td><td></td></tr>`).join("");
-  return `<div class="slip">
+  const pad = (list, n, cells) => list.concat(Array.from({ length: Math.max(0, n - list.length) }, () => null)).map(r => r ? cells(r) : `<tr class="blank">${"<td>&nbsp;</td>".repeat(cells({}).match(/<td/g).length)}</tr>`).join("");
+  const box = (label, value, cls = "") => `<div class="box ${cls}"><small>${esc(label)}</small><b>${esc(value) || "&nbsp;"}</b></div>`;
+  return `<div class="slip fmt">
     <img class="banner" src="payslip-header.jpg" alt="Payslip — ${esc(C.companyName)}">
-    <div class="co"><span>${esc(C.address)}</span><span>Reg. no ${esc(C.regNo)} · Tel ${esc(C.phone)}</span></div>
-    <div class="info">${s.info.map(([k, x]) => `<div><small>${esc(k)}</small><b>${esc(x)}</b></div>`).join("")}</div>
-    <div class="tables">
-      <table><tr><th>Earnings</th><th class="r">Amount</th></tr>${s.earn.map(tr).join("")}${pad(rows - s.earn.length)}${s.totEarn !== null ? `<tr class="tot"><td>Total earnings</td><td class="r">${esc(fmtMoney(s.totEarn))}</td></tr>` : ""}</table>
-      <table><tr><th>Deductions</th><th class="r">Amount</th></tr>${s.ded.map(tr).join("")}${pad(rows - s.ded.length)}${s.totDed !== null ? `<tr class="tot"><td>Total deductions</td><td class="r">${esc(fmtMoney(s.totDed))}</td></tr>` : ""}</table>
+    <div class="co"><b>${esc(C.companyName)}</b><span>Address : ${esc(C.address)}</span><span>Registration number : ${esc(C.regNo)} · Phone : ${esc(C.phone)}</span></div>
+    <div class="boxes">
+      ${box("Employee", s.name, "w2")}${box("Number", s.number)}
+      ${box("I.D. No.", s.id)}${box("Start work date", s.start)}${box("Date of Birth", s.dob)}
+      ${box("Occupation", s.occ)}${box("Pay data", s.period)}${box("Tip", s.tip)}
     </div>
-    ${s.counts.length ? `<div><div class="cap">Days, leave and hours</div><div class="att">${s.counts.map(([k, x]) => `<div><small>${esc(k)}</small><b>${esc(fmtCount(x))}</b></div>`).join("")}</div></div>` : ""}
+    <table class="ft"><tr><th>Earnings</th><th class="r">One day pay</th><th class="r">Rate</th><th class="r">Total</th></tr>
+      ${pad(s.earn, 7, r => `<tr><td>${esc(r.label ?? "")}</td><td class="r">${r.day ? "R " + fmtMoney(r.day) : ""}</td><td class="r">${qtyTxt(r.qty)}</td><td class="r">${r.label ? R$(r.amt) : ""}</td></tr>`)}
+      <tr class="tot"><td></td><td></td><td class="r">Total Payments</td><td class="r">${"R " + fmtMoney(s.totPay)}</td></tr></table>
+    <table class="ft"><tr><th>Deductions</th><th class="r"></th><th class="r">Rate</th><th class="r">Total</th></tr>
+      ${pad(s.ded, 6, r => `<tr><td>${esc(r.label ?? "")}</td><td></td><td class="r">${qtyTxt(r.qty)}</td><td class="r">${r.label ? R$(r.amt) : ""}</td></tr>`)}
+      <tr class="tot"><td></td><td></td><td class="r">Total Deductions</td><td class="r">${"R " + fmtMoney(s.totDed)}</td></tr></table>
+    <div><div class="cap">Leave this month (days)</div><div class="att">${s.leave.map(([k, n]) => `<div><small>${esc(k)}</small><b>${fmtCount(n)}</b></div>`).join("")}</div></div>
     <div class="foot">
-      <div><div class="cap">Paid into</div>Bank: <b>${esc(s.bank) || "—"}</b><br>Account: <b>${esc(s.account) || "—"}</b><br>Branch code: <b>${esc(s.branch) || "—"}</b></div>
-      <div class="net"><small>NET PAY</small><b>${isBlank(s.net) ? "—" : "R " + esc(fmtMoney(s.net))}</b></div>
+      <div>Bank Details : <b>${esc(s.bank)}</b><br>Bank Account : <b>${esc(s.account)}</b><br>Branch Code : <b>${esc(s.branch)}</b></div>
+      <div class="net"><small>NET PAY</small><b>${typeof s.net === "number" ? "R " + fmtMoney(s.net) : esc(s.net)}</b></div>
     </div>
-    ${s.notes.length ? `<p class="note">${s.notes.map(esc).join("<br>")}</p>` : ""}
-    <div class="sigs"><div>Signature of employee</div><div class="d">Date</div><div>Signature of employer</div><div class="d">Date</div></div>
+    <div class="sigs"><div>Signature of Employee</div><div class="d">Date</div><div>Signature of Employer</div><div class="d">Date</div></div>
   </div>`;
 }
 function printSlips(ids) {
@@ -481,64 +522,66 @@ function drawSlip(doc, p, img) {
   const s = slip(p), C = company;
   const L = 14, Rr = 196, W = Rr - L, bh = W * 173 / 1600, gold = [209, 177, 20], ink = [17, 17, 17];
   const fit = (t, w) => { t = String(t ?? ""); while (t.length > 1 && doc.getTextWidth(t) > w) t = t.slice(0, -1); return t; };
-  doc.addImage(img, "JPEG", L, 12, W, bh, "header", "FAST");
-  let y = 12 + bh + 7.5;
-  doc.setTextColor(70); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
-  doc.text(C.address || "", L, y); doc.text(`Reg. no ${C.regNo || ""}   ·   Tel ${C.phone || ""}`, L, y + 4.5);
-  y += 8.5; doc.setDrawColor(0); doc.setLineWidth(0.4); doc.line(L, y, Rr, y);
-  // details, five per row (first one wider)
-  const xs = [L, L + 60, L + 92, L + 124, L + 156], ws = [56, 30, 30, 30, 26];
-  s.info.forEach(([k, x], i) => {
-    const r = Math.floor(i / 5), c = i % 5, yy = y + 8 + r * 13;
-    doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(110); doc.text(fit(k.toUpperCase(), ws[c]), xs[c], yy);
-    doc.setTextColor(0); doc.setFont("helvetica", "bold"); let fs = 10.5; doc.setFontSize(fs); while (fs > 7 && doc.getTextWidth(String(x || "—")) > ws[c]) doc.setFontSize(fs -= 0.5); doc.text(fit(x || "—", ws[c]), xs[c], yy + 5.5);
-  });
-  y += 8 + Math.ceil(s.info.length / 5) * 13 - 2; doc.setDrawColor(0); doc.setLineWidth(0.4); doc.line(L, y, Rr, y);
-  // earnings and deductions
-  const ty = y + 7, colW = W / 2 - 4, rowsN = Math.max(s.earn.length, s.ded.length, 1);
-  const rowH = rowsN > 10 ? 5.8 : 7.2;
-  const table = (x, title, rows, total, label) => {
-    doc.setFillColor(...ink); doc.rect(x, ty, colW, 8, "F"); doc.setTextColor(255);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text(title, x + 3, ty + 5.4); doc.text("AMOUNT", x + colW - 3, ty + 5.4, { align: "right" });
-    doc.setFont("helvetica", "normal"); doc.setFontSize(rowsN > 10 ? 9 : 10);
-    let yy = ty + 8 + rowH - 2.2;
-    rows.forEach(([l, v]) => {
-      doc.setTextColor(toNum(v) ? 0 : 140);
-      doc.text(fit(l, colW - 34), x + 3, yy); doc.text(fmtMoney(v), x + colW - 3, yy, { align: "right" });
-      doc.setDrawColor(220); doc.setLineWidth(0.2); doc.line(x, yy + 2.2, x + colW, yy + 2.2); yy += rowH;
-    });
-    doc.setTextColor(0);
-    let yt = ty + 8 + rowsN * rowH;
-    if (total !== null) { doc.setDrawColor(0); doc.setLineWidth(0.5); doc.line(x, yt + 1, x + colW, yt + 1); doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.text(label, x + 3, yt + 7.5); doc.text(fmtMoney(total), x + colW - 3, yt + 7.5, { align: "right" }); yt += 7.5; }
-    return yt;
+  const shrink = (t, w, size, min = 7) => { doc.setFontSize(size); while (size > min && doc.getTextWidth(String(t)) > w) doc.setFontSize(size -= 0.5); return fit(t, w); };
+  doc.addImage(img, "JPEG", L, 10, W, bh, "header", "FAST");
+  let y = 10 + bh + 6;
+  doc.setTextColor(0); doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.text(C.companyName || "", L, y);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(70);
+  doc.text(fit(`Address : ${C.address || ""}`, W), L, y + 4.5); doc.text(fit(`Registration number : ${C.regNo || ""}   ·   Phone : ${C.phone || ""}`, W), L, y + 8.5);
+  y += 13;
+  // the boxes: Employee | Number ; ID | Start | DOB ; Occupation | Pay data | Tip
+  const g = 4, w3 = (W - 2 * g) / 3, bhx = 12;
+  const box = (x, yy, w, label, value) => {
+    doc.setDrawColor(150); doc.setLineWidth(0.3); doc.roundedRect(x, yy, w, bhx, 1.2, 1.2);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(110); doc.text(label.toUpperCase(), x + 2.5, yy + 4);
+    doc.setFont("helvetica", "bold"); doc.setTextColor(0); doc.text(shrink(value || "", w - 5, 10.5), x + 2.5, yy + 9.5);
   };
-  const e1 = table(L, "EARNINGS", s.earn, s.totEarn, "Total earnings");
-  const e2 = table(L + colW + 8, "DEDUCTIONS", s.ded, s.totDed, "Total deductions");
-  y = Math.max(e1, e2) + 11;
-  // days, leave and hours
-  if (s.counts.length) {
-    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(0); doc.text("DAYS, LEAVE AND HOURS", L, y);
-    const per = 7, rowsC = Math.ceil(s.counts.length / per), cw = W / Math.min(per, s.counts.length);
-    y += 3; doc.setFillColor(244, 243, 238); doc.rect(L, y, W, rowsC * 17 + 2, "F");
-    s.counts.forEach(([k, x], i) => {
-      const r = Math.floor(i / per), c = i % per, cx = L + cw * c + cw / 2, yy = y + r * 17;
-      doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(110); doc.text(fit(k.toUpperCase(), cw - 2), cx, yy + 6.5, { align: "center" });
-      doc.setFont("helvetica", "bold"); doc.setFontSize(12.5); doc.setTextColor(0); doc.text(fmtCount(x), cx, yy + 14, { align: "center" });
-    });
-    y += rowsC * 17 + 2 + 12;
-  } else y += 4;
-  // bank and net pay
-  doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(0); doc.text("PAID INTO", L, y);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(11);
-  doc.text(fit(`Bank: ${s.bank || "—"}`, 90), L, y + 8); doc.text(fit(`Account: ${s.account || "—"}`, 90), L, y + 14.5); doc.text(fit(`Branch code: ${s.branch || "—"}`, 90), L, y + 21);
-  const nw = 84, nh = 28, nx = Rr - nw, ny = y - 4;
-  doc.setFillColor(...ink); doc.rect(nx, ny, nw, nh, "F"); doc.setFillColor(...gold); doc.rect(nx, ny, 3.5, nh, "F");
-  doc.setTextColor(...gold); doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("NET PAY", Rr - 5, ny + 8, { align: "right" });
-  doc.setTextColor(255); doc.setFontSize(22); doc.text(isBlank(s.net) ? "—" : "R " + fmtMoney(s.net), Rr - 5, ny + 21, { align: "right" }); doc.setTextColor(0);
-  y += 32;
-  if (s.notes.length) { doc.setFont("helvetica", "italic"); doc.setFontSize(9.5); doc.setTextColor(70); s.notes.slice(0, 4).forEach((n, i) => doc.text(fit(n, W), L, y + i * 5)); doc.setTextColor(0); y += s.notes.length * 5; }
-  const sy = Math.min(Math.max(268, y + 14), 288); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setDrawColor(0); doc.setLineWidth(0.3);
-  [[L, "Signature of employee"], [L + 58, "Date"], [Rr - 82, "Signature of employer"], [Rr - 24, "Date"]].forEach(([x, t], i) => { const w = i % 2 ? 24 : 52; doc.line(x, sy, x + w, sy); doc.text(t, x, sy + 4.5); });
+  box(L, y, w3 * 2 + g, "Employee", s.name); box(L + 2 * (w3 + g), y, w3, "Number", s.number); y += bhx + 3;
+  box(L, y, w3, "I.D. No.", s.id); box(L + w3 + g, y, w3, "Start work date", s.start); box(L + 2 * (w3 + g), y, w3, "Date of Birth", s.dob); y += bhx + 3;
+  box(L, y, w3, "Occupation", s.occ); box(L + w3 + g, y, w3, "Pay data", s.period); box(L + 2 * (w3 + g), y, w3, "Tip", s.tip); y += bhx + 6;
+  // tables
+  const cx = [L + 3, Rr - 70, Rr - 38, Rr - 3];   // label, one day pay (right), rate (right), total (right)
+  const table = (title, heads, rows, minRows, totalLabel, total) => {
+    doc.setFillColor(...ink); doc.rect(L, y, W, 7.5, "F"); doc.setTextColor(255); doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+    doc.text(title, cx[0], y + 5); heads.forEach((h, i) => h && doc.text(h, cx[i + 1], y + 5, { align: "right" }));
+    const n = Math.max(rows.length, minRows), rh = n > 10 ? 5.6 : 6.4;
+    let yy = y + 7.5;
+    for (let i = 0; i < n; i++) {
+      const r = rows[i];
+      if (i % 2) { doc.setFillColor(246, 246, 243); doc.rect(L, yy, W, rh, "F"); }
+      if (r) {
+        doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(0);
+        doc.text(fit(r.label, 95), cx[0], yy + rh - 1.8);
+        if (r.day) doc.text("R " + fmtMoney(r.day), cx[1], yy + rh - 1.8, { align: "right" });
+        if (qtyTxt(r.qty)) doc.text(qtyTxt(r.qty), cx[2], yy + rh - 1.8, { align: "right" });
+        doc.setTextColor(r.amt ? 0 : 150); doc.text(R$(r.amt), cx[3], yy + rh - 1.8, { align: "right" }); doc.setTextColor(0);
+      }
+      yy += rh;
+    }
+    doc.setDrawColor(0); doc.setLineWidth(0.4); doc.line(L, yy, Rr, yy);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.text(totalLabel, cx[2], yy + 6, { align: "right" }); doc.text("R " + fmtMoney(total), cx[3], yy + 6, { align: "right" });
+    y = yy + 12;
+  };
+  table("EARNINGS", ["ONE DAY PAY", "RATE", "TOTAL"], s.earn, 7, "Total Payments", s.totPay);
+  table("DEDUCTIONS", ["", "RATE", "TOTAL"], s.ded, 6, "Total Deductions", s.totDed);
+  // leave this month: number of days of each kind
+  y += 4;
+  doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(0); doc.text("LEAVE THIS MONTH (DAYS)", L, y - 2);
+  const cw = W / s.leave.length; doc.setFillColor(244, 243, 238); doc.rect(L, y, W, 13, "F");
+  s.leave.forEach(([k, n], i) => { const x = L + cw * i + cw / 2;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(6.5); doc.setTextColor(110); doc.text(fit(k.toUpperCase(), cw - 2), x, y + 4.5, { align: "center" });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(n ? 0 : 160); doc.text(fmtCount(n), x, y + 10.5, { align: "center" }); });
+  doc.setTextColor(0); y += 19;
+  // bank details and net pay
+  y += 2;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(0);
+  doc.text(fit(`Bank Details : ${s.bank}`, 95), L, y + 4); doc.text(fit(`Bank Account : ${s.account}`, 95), L, y + 10.5); doc.text(fit(`Branch Code : ${s.branch}`, 95), L, y + 17);
+  const nw = 80, nh = 22, nx = Rr - nw;
+  doc.setFillColor(...ink); doc.rect(nx, y - 2, nw, nh, "F"); doc.setFillColor(...gold); doc.rect(nx, y - 2, 3.5, nh, "F");
+  doc.setTextColor(...gold); doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("NET PAY", Rr - 5, y + 4.5, { align: "right" });
+  doc.setTextColor(255); doc.setFontSize(19); doc.text(typeof s.net === "number" ? "R " + fmtMoney(s.net) : String(s.net), Rr - 5, y + 15, { align: "right" }); doc.setTextColor(0);
+  const sy = Math.min(Math.max(274, y + 34), 288); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setDrawColor(0); doc.setLineWidth(0.3);
+  [[L, "Signature of Employee"], [L + 58, "Date"], [Rr - 82, "Signature of Employer"], [Rr - 24, "Date"]].forEach(([x, t], i) => { const w = i % 2 ? 24 : 52; doc.line(x, sy, x + w, sy); doc.text(t, x, sy + 4.5); });
 }
 async function buildPdf(list) {
   const img = await loadHeader();
