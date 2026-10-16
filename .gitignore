@@ -1,3 +1,5 @@
 # Nothing private belongs in this folder
 *.xlsx
 *.sql
+# a second copy of the project inside this folder
+Lezmin-Payroll/
