@@ -195,3 +195,29 @@ dialog h2 { margin: 0; }
 
 .grouphead{margin:18px 0 6px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
 #deptFilter{min-width:200px}
+
+/* payslip in the Lezmin format */
+.slip.fmt { gap: 4mm; }
+.slip.fmt .co { margin-top: -1mm; border-bottom: 0; }
+.slip.fmt .co b { font-size: 11pt; color: #000; }
+.slip .boxes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 3mm 4mm; }
+.slip .boxes .box { border: 1px solid #999; border-radius: 1.2mm; padding: 1.5mm 2.5mm; min-height: 12mm; }
+.slip .boxes .box.w2 { grid-column: span 2; }
+.slip .boxes small { display: block; font-size: 7pt; color: #666; text-transform: uppercase; letter-spacing: .04em; }
+.slip .boxes b { font-size: 10.5pt; white-space: nowrap; }
+.slip table.ft td { padding: 1.3mm 3mm; border-bottom: 0; }
+.slip table.ft tr:nth-child(odd):not(.tot) td { background: #f6f6f3; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.slip table.ft tr.tot td { border-top: 1.5px solid #000; padding-top: 2mm; }
+.slip.fmt { gap: 3mm; font-size: 9.5pt; }
+.slip.fmt th { text-transform: uppercase; padding: 1.6mm 3mm; font-size: 8.5pt; }
+.slip.fmt table.ft td { padding: .9mm 3mm; }
+.slip.fmt .boxes { gap: 2.5mm 4mm; }
+.slip.fmt .boxes .box { min-height: 10.5mm; padding: 1.2mm 2.5mm; }
+.slip.fmt .cap { font-size: 8.5pt; margin-bottom: 1mm; }
+.slip.fmt .att { padding: 1.8mm 0; grid-template-columns: repeat(7, 1fr); }
+.slip.fmt .att small { font-size: 6.5pt; white-space: nowrap; }
+.slip.fmt .att b { font-size: 11pt; }
+.slip.fmt .foot { font-size: 10pt; line-height: 1.5; }
+.slip.fmt .net { padding: 3mm 5mm; min-width: 78mm; }
+.slip.fmt .net b { font-size: 19pt; }
+.slip.fmt .sigs { padding-bottom: 2mm; }
